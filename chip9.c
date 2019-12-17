@@ -168,12 +168,12 @@ static const char* opstr[] = {
 #define RF_FIRST(X) (X<<16)
 
 // FLAG REG:
-#define FLAG_Z (1<<7)
-#define FLAG_N (1<<6)
-#define FLAG_H (1<<5)
-#define FLAG_C (1<<4)
+#define FZ (1<<7)
+#define FN (1<<6)
+#define FH (1<<5)
+#define FC (1<<4)
 //custom
-#define FLAG_NOT (1<<0)
+#define FNOT (1<<0)
 
 #define REG2(R1, R2) (RF_FIRST(R1) | R2)
 #define POINTER(R1) (R1)
@@ -295,14 +295,14 @@ static const struct opcode {
 	[0xfd] = { OT_MOVX, ET_2REG, 0, REG2(RF_H, RF_D),},
 
 	[0x08] = { OT_CLRF, ET_NONE, 0, 0,},
-	[0x18] = { OT_SETF, ET_FL, 0, FLAG_Z, },
-	[0x28] = { OT_SETF, ET_FL, 0, FLAG_Z|FLAG_NOT,},
-	[0x38] = { OT_SETF, ET_FL, 0, FLAG_N,},
-	[0x48] = { OT_SETF, ET_FL, 0, FLAG_N|FLAG_NOT,},
-	[0x58] = { OT_SETF, ET_FL, 0, FLAG_H,},
-	[0x68] = { OT_SETF, ET_FL, 0, FLAG_H|FLAG_NOT,},
-	[0x78] = { OT_SETF, ET_FL, 0, FLAG_C,},
-	[0x88] = { OT_SETF, ET_FL, 0, FLAG_C|FLAG_NOT,},
+	[0x18] = { OT_SETF, ET_FL, 0, FZ, },
+	[0x28] = { OT_SETF, ET_FL, 0, FZ|FNOT,},
+	[0x38] = { OT_SETF, ET_FL, 0, FN,},
+	[0x48] = { OT_SETF, ET_FL, 0, FN|FNOT,},
+	[0x58] = { OT_SETF, ET_FL, 0, FH,},
+	[0x68] = { OT_SETF, ET_FL, 0, FH|FNOT,},
+	[0x78] = { OT_SETF, ET_FL, 0, FC,},
+	[0x88] = { OT_SETF, ET_FL, 0, FC|FNOT,},
 
 	[0x04] = { OT_ADD, ET_REG, 0, RF_B, },
 	[0x14] = { OT_ADD, ET_REG, 0, RF_C,},
@@ -408,24 +408,24 @@ static const struct opcode {
 	[0xf1] = { OT_DRAW, ET_NONE, 0, 0},
 
 	[0x0f] = { OT_JMP16, ET_NONE, 2, 0, },
-	[0x1f] = { OT_JMP16C, ET_FL, 2, FLAG_Z, },
-	[0x2f] = { OT_JMP16C, ET_FL, 2, FLAG_Z | FLAG_NOT, },
-	[0x3f] = { OT_JMP16C, ET_FL, 2, FLAG_N, },
-	[0x4f] = { OT_JMP16C, ET_FL, 2, FLAG_N | FLAG_NOT, },
-	[0x5f] = { OT_JMP16C, ET_FL, 2, FLAG_H, },
-	[0x6f] = { OT_JMP16C, ET_FL, 2, FLAG_H | FLAG_NOT, },
-	[0x7f] = { OT_JMP16C, ET_FL, 2, FLAG_C, },
-	[0x8f] = { OT_JMP16C, ET_FL, 2, FLAG_C | FLAG_NOT, },
+	[0x1f] = { OT_JMP16C, ET_FL, 2, FZ, },
+	[0x2f] = { OT_JMP16C, ET_FL, 2, FZ | FNOT, },
+	[0x3f] = { OT_JMP16C, ET_FL, 2, FN, },
+	[0x4f] = { OT_JMP16C, ET_FL, 2, FN | FNOT, },
+	[0x5f] = { OT_JMP16C, ET_FL, 2, FH, },
+	[0x6f] = { OT_JMP16C, ET_FL, 2, FH | FNOT, },
+	[0x7f] = { OT_JMP16C, ET_FL, 2, FC, },
+	[0x8f] = { OT_JMP16C, ET_FL, 2, FC | FNOT, },
 
 	[0x9f] = { OT_JMP8, ET_NONE, 1, 0, },
-	[0xaf] = { OT_JMP8C, ET_FL, 1, FLAG_Z, },
-	[0xbf] = { OT_JMP8C, ET_FL, 1, FLAG_Z | FLAG_NOT, },
-	[0xcf] = { OT_JMP8C, ET_FL, 1, FLAG_N, },
-	[0xdf] = { OT_JMP8C, ET_FL, 1, FLAG_N | FLAG_NOT,},
-	[0xef] = { OT_JMP8C, ET_FL, 1, FLAG_H, },
-	[0xff] = { OT_JMP8C, ET_FL, 1, FLAG_H | FLAG_NOT, },
-	[0xee] = { OT_JMP8C, ET_FL, 1, FLAG_C, },
-	[0xfe] = { OT_JMP8C, ET_FL, 1, FLAG_C | FLAG_NOT, },
+	[0xaf] = { OT_JMP8C, ET_FL, 1, FZ, },
+	[0xbf] = { OT_JMP8C, ET_FL, 1, FZ | FNOT, },
+	[0xcf] = { OT_JMP8C, ET_FL, 1, FN, },
+	[0xdf] = { OT_JMP8C, ET_FL, 1, FN | FNOT,},
+	[0xef] = { OT_JMP8C, ET_FL, 1, FH, },
+	[0xff] = { OT_JMP8C, ET_FL, 1, FH | FNOT, },
+	[0xee] = { OT_JMP8C, ET_FL, 1, FC, },
+	[0xfe] = { OT_JMP8C, ET_FL, 1, FC | FNOT, },
 
 	[0x1e] = { OT_CALL, ET_NONE, 2, 0},
 	[0x0e] = { OT_RET, ET_NONE, 0, 0},
@@ -502,11 +502,11 @@ static char* fmtbin(char *buf, unsigned char *pc, int bytes) {
 	return buf;
 }
 static char *flagstr(unsigned char desc) {
-	switch(desc & ~FLAG_NOT) {
-		case FLAG_Z: return "z";
-		case FLAG_N: return "n";
-		case FLAG_H: return "h";
-		case FLAG_C: return "c";
+	switch(desc & ~FNOT) {
+		case FZ: return "z";
+		case FN: return "n";
+		case FH: return "h";
+		case FC: return "c";
 		default: abort();
 	}
 }
@@ -517,7 +517,7 @@ static char *fmtins(char *buf) {
 	switch(oi->enctype) {
 		case ET_REG: p += sprintf(p, " %s", regnames[oi->opdesc]); break;
 		case ET_2REG: p += sprintf(p, " %s, %s", regnames[GETREG1(oi->opdesc)], regnames[GETREG2(oi->opdesc)]); break;
-		case ET_FL: p += sprintf(p, "%s%s", oi->opdesc & FLAG_NOT ? "n" : "", flagstr(oi->opdesc)); break;
+		case ET_FL: p += sprintf(p, "%s%s", oi->opdesc & FNOT ? "n" : "", flagstr(oi->opdesc)); break;
 	}
 	if(oi->argb == 2) sprintf(p, " %04x", IPVW);
 	else if(oi->argb == 1) sprintf(p, " %02x", IPVB);
@@ -525,10 +525,10 @@ static char *fmtins(char *buf) {
 }
 static char *fmtflags(char* buf) {
 	char* p = buf;
-	if(F & FLAG_Z) *(p++) = 'Z';
-	if(F & FLAG_N) *(p++) = 'N';
-	if(F & FLAG_H) *(p++) = 'H';
-	if(F & FLAG_C) *(p++) = 'C';
+	if(F & FZ) *(p++) = 'Z';
+	if(F & FN) *(p++) = 'N';
+	if(F & FH) *(p++) = 'H';
+	if(F & FC) *(p++) = 'C';
 	*p = 0;
 	return buf;
 }
@@ -538,26 +538,26 @@ static void state() {
 	regs.pc, regs.sp, A, B, C, D, E, H, L, fmtflags(buf));
 }
 static void alu_set(unsigned char *old, unsigned short new) {
-	setbit(FLAG_Z, new == 0);
-	setbit(FLAG_N, new & (1<<7));
-	setbit(FLAG_C, new & (1<<8));
+	setbit(FZ, new == 0);
+	setbit(FN, new & (1<<7));
+	setbit(FC, new & (1<<8));
 	*old = new;
 }
 static void alu_add(unsigned char* old, unsigned char val) {
 	unsigned short result = *old + val;
-	setbit(FLAG_Z, !!(result == 0));
-	setbit(FLAG_N, !!(result & (1<<7)));
-	setbit(FLAG_C, !!(result & (1<<8)));
-	setbit(FLAG_H, !!(((*old&0xf) + (val&0xf))&0x10));
+	setbit(FZ, !!(result == 0));
+	setbit(FN, !!(result & (1<<7)));
+	setbit(FC, !!(result & (1<<8)));
+	setbit(FH, !!(((*old&0xf) + (val&0xf))&0x10));
 	*old = result;
 }
 static void setflags(unsigned char result) {
-	setbit(FLAG_Z, result == 0);
-	setbit(FLAG_N, result & (1<<7));
+	setbit(FZ, result == 0);
+	setbit(FN, result & (1<<7));
 }
 static void setflagsw(unsigned short result) {
-	setbit(FLAG_Z, result == 0);
-	setbit(FLAG_N, result & (1<<15));
+	setbit(FZ, result == 0);
+	setbit(FN, result & (1<<15));
 }
 static int step() {
 	const struct opcode *oi = &opcodes[IP];
@@ -606,7 +606,7 @@ static int step() {
 	case OT_MOVRP: *REGPTR(GETREG1(oi->opdesc)) = *HLPTR; break;
 	case OT_MOVX: *REGPTRW(GETREG1(oi->opdesc)) = *REGPTRW(GETREG2(oi->opdesc)); break;
 	case OT_CLRF: F = 0; break;
-	case OT_SETF: setbit(oi->opdesc & ~FLAG_NOT, !(oi->opdesc & FLAG_NOT)); break;
+	case OT_SETF: setbit(oi->opdesc & ~FNOT, !(oi->opdesc & FNOT)); break;
 	case OT_ADD:  alu_add(REGPTR(oi->opdesc), A); break;
 	case OT_ADDP: alu_add(HLPTR, A); break;
 	case OT_ADDI: alu_add(REGPTR(oi->opdesc), IPVB); break;
@@ -625,11 +625,11 @@ static int step() {
 	case OT_ORI:  F = 0; *REGPTR(oi->opdesc) |= IPVB; setflags(*REGPTR(oi->opdesc)); break;
 	case OT_XOR:  F = 0; *REGPTR(oi->opdesc) ^= A; setflags(*REGPTR(oi->opdesc)); break;
 	case OT_XORI: F = 0; *REGPTR(oi->opdesc) ^= IPVB; setflags(*REGPTR(oi->opdesc)); break;
-	case OT_CMP:  itmp = *REGPTR(oi->opdesc) - A; setbit(FLAG_Z, itmp == 0); setbit(FLAG_N, itmp < 0); break;
-	case OT_CMPP: itmp = *HLPTR - A; setbit(FLAG_Z, itmp == 0); setbit(FLAG_N, itmp < 0); break;
-	case OT_CMPI: itmp = A - IPVB; setbit(FLAG_Z, itmp == 0); setbit(FLAG_N, itmp < 0); break;
-	case OT_CMPS: setbit(FLAG_Z, A==*REGPTR(oi->opdesc)); setbit(FLAG_N, *(signed char*)REGPTR(oi->opdesc) < (signed char)A); break;
-	case OT_CMPSP:setbit(FLAG_Z, A==*HLPTR); setbit(FLAG_N, *(signed char*)HLPTR < (signed char)A); break;
+	case OT_CMP:  itmp = *REGPTR(oi->opdesc) - A; setbit(FZ, itmp == 0); setbit(FN, itmp < 0); break;
+	case OT_CMPP: itmp = *HLPTR - A; setbit(FZ, itmp == 0); setbit(FN, itmp < 0); break;
+	case OT_CMPI: itmp = A - IPVB; setbit(FZ, itmp == 0); setbit(FN, itmp < 0); break;
+	case OT_CMPS: setbit(FZ, A==*REGPTR(oi->opdesc)); setbit(FN, *(signed char*)REGPTR(oi->opdesc) < (signed char)A); break;
+	case OT_CMPSP:setbit(FZ, A==*HLPTR); setbit(FN, *(signed char*)HLPTR < (signed char)A); break;
 	case OT_SIN:  A = fgetc(stdin); break;
 	case OT_SOUT:
 	fputc(A, stdout);
@@ -638,18 +638,18 @@ dprintf(2, ">>> "); fputc(A, stderr); dprintf(2, "\n"); fflush(stdout); break;
 	case OT_DRAW: ; draw(C, B, A); break;
 	case OT_JMP16:  regs.pc = IPVW; inc = 0; break;
 	case OT_JMP16C:
-		tmp = oi->opdesc & ~FLAG_NOT;
-		if(((oi->opdesc & FLAG_NOT) && !(F & tmp))
-		|| (!(oi->opdesc & FLAG_NOT) && (F & tmp))) {
+		tmp = oi->opdesc & ~FNOT;
+		if(((oi->opdesc & FNOT) && !(F & tmp))
+		|| (!(oi->opdesc & FNOT) && (F & tmp))) {
 			regs.pc = IPVW;
 			inc = 0;
 		}
 		break;
 	case OT_JMP8: regs.pc += (signed char)IPVB; break;
 	case OT_JMP8C:
-		tmp = oi->opdesc & ~FLAG_NOT;
-		if(((oi->opdesc & FLAG_NOT) && !(F & tmp))
-		|| (!(oi->opdesc & FLAG_NOT) && (F & tmp)))
+		tmp = oi->opdesc & ~FNOT;
+		if(((oi->opdesc & FNOT) && !(F & tmp))
+		|| (!(oi->opdesc & FNOT) && (F & tmp)))
 			regs.pc += (signed char)IPVB;
 		break;
 	case OT_CALL: pushw(regs.pc+inc); regs.pc = IPVW; inc = 0; break;
