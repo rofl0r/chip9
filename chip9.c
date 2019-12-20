@@ -1,9 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define EZSDL_BITDEPTH 8
+#if EZSDL_BITDEPTH == 8
+#define PIXEL char
+#elif EZSDL_BITDEPTH == 16
+#define PIXEL short
+#elif EZSDL_BITDEPTH == 32
+#define PIXEL int
+#endif
 #include "ezsdl.h"
 
-static int debug = 1;
+static int debug = 0;
 
 static unsigned char *bootrom;
 static unsigned lbootrom;
@@ -12,21 +20,33 @@ static unsigned lrom;
 static unsigned char mem[0x10000];
 static const unsigned vmem_w = 128;
 static const unsigned vmem_h = 64;
+#define SCALE 4
 static unsigned char vmem[128*64];
+union reg {
+	unsigned char  b[2][2];
+	unsigned short w[2];
+	unsigned       d; /* padding for alignment, carry */
+};
+
 static struct {
+	//union reg af, bc, de, hl, sp, pc;
 	unsigned char gpr[7+1];
 	unsigned short sp, pc;
 } regs;
 
-#define N_A 0
-#define N_F 1
-#define N_B 2
-#define N_C 3
-#define N_D 4
-#define N_E 5
-#define N_H 6
-#define N_L 7
-#define N_LAST N_L
+#define N_A 1
+#define N_F 0
+#define N_B 3
+#define N_C 2
+#define N_BC N_C
+#define N_D 5
+#define N_E 4
+#define N_DE N_E
+#define N_H 7
+#define N_L 6
+#define N_HL N_L
+#define N_LAST N_H
+#define N_SP (N_LAST+1)
 
 #define A regs.gpr[N_A]
 #define F regs.gpr[N_F]
@@ -36,6 +56,8 @@ static struct {
 #define E regs.gpr[N_E]
 #define H regs.gpr[N_H]
 #define L regs.gpr[N_L]
+#define SP regs.sp
+#define PC regs.pc
 
 #define PAIR(X,Y) ((X<<8)|Y)
 #define BC PAIR(B, C)
@@ -164,7 +186,10 @@ static const char* opstr[] = {
 #define RF_E (N_E)
 #define RF_H (N_H)
 #define RF_L (N_L)
-#define RF_SP (N_LAST+1)
+#define RF_BC (N_BC)
+#define RF_DE (N_DE)
+#define RF_HL (N_HL)
+#define RF_SP (N_SP)
 #define RF_FIRST(X) (X<<16)
 
 // FLAG REG:
@@ -174,6 +199,7 @@ static const char* opstr[] = {
 #define FC (1<<4)
 //custom
 #define FNOT (1<<0)
+#define FL 0x0F /* low unused portion of flags */
 
 #define REG2(R1, R2) (RF_FIRST(R1) | R2)
 #define POINTER(R1) (R1)
@@ -197,12 +223,12 @@ static const struct opcode {
 	[0x50] = { OT_LDI, ET_REG, 1, RF_E, },
 	[0x60] = { OT_LDI, ET_REG, 1, RF_H, },
 	[0x70] = { OT_LDI, ET_REG, 1, RF_L, },
-	[0x80] = { OT_LDIP, ET_REG, 1, POINTER(RF_H), },
+	[0x80] = { OT_LDIP, ET_REG, 1, POINTER(RF_HL), },
 	[0x90] = { OT_LDI, ET_REG, 1, RF_A, },
 
-	[0x21] = { OT_LDX, ET_REG, 2, RF_B, },
-	[0x31] = { OT_LDX, ET_REG, 2, RF_D, },
-	[0x41] = { OT_LDX, ET_REG, 2, RF_H, },
+	[0x21] = { OT_LDX, ET_REG, 2, RF_BC, },
+	[0x31] = { OT_LDX, ET_REG, 2, RF_DE, },
+	[0x41] = { OT_LDX, ET_REG, 2, RF_HL, },
 	[0x22] = { OT_LDX, ET_REG, 2, RF_SP, },
 
 	[0x81] = { OT_PUSH, ET_REG, 0, RF_B,},
@@ -211,29 +237,29 @@ static const struct opcode {
 	[0xb1] = { OT_PUSH, ET_REG, 0, RF_E,},
 	[0xc1] = { OT_PUSH, ET_REG, 0, RF_H,},
 	[0xd1] = { OT_PUSH, ET_REG, 0, RF_L,},
-	[0xc0] = { OT_PUSHP, ET_REG, 0, POINTER(RF_H),},
+	[0xc0] = { OT_PUSHP, ET_REG, 0, POINTER(RF_HL),},
 	[0xd0] = { OT_PUSH, ET_REG, 0, RF_A,},
-	[0x51] = { OT_PUSHX, ET_REG, 0, RF_B,},
-	[0x61] = { OT_PUSHX, ET_REG, 0, RF_D,},
-	[0x71] = { OT_PUSHX, ET_REG, 0, RF_H,},
+	[0x51] = { OT_PUSHX, ET_REG, 0, RF_BC,},
+	[0x61] = { OT_PUSHX, ET_REG, 0, RF_DE,},
+	[0x71] = { OT_PUSHX, ET_REG, 0, RF_HL,},
 	[0x82] = { OT_POP, ET_REG, 0, RF_B,},
 	[0x92] = { OT_POP, ET_REG, 0, RF_C, },
 	[0xa2] = { OT_POP, ET_REG, 0, RF_D, },
 	[0xb2] = { OT_POP, ET_REG, 0, RF_E, },
 	[0xc2] = { OT_POP, ET_REG, 0, RF_H, },
 	[0xd2] = { OT_POP, ET_REG, 0, RF_L, },
-	[0xc3] = { OT_POPP, ET_REG, 0, POINTER(RF_H), },
+	[0xc3] = { OT_POPP, ET_REG, 0, POINTER(RF_HL), },
 	[0xd3] = { OT_POP, ET_REG, 0, RF_A, },
-	[0x52] = { OT_POPX, ET_REG, 0, RF_B, },
-	[0x62] = { OT_POPX, ET_REG, 0, RF_D,},
-	[0x72] = { OT_POPX, ET_REG, 0, RF_H,},
+	[0x52] = { OT_POPX, ET_REG, 0, RF_BC, },
+	[0x62] = { OT_POPX, ET_REG, 0, RF_DE,},
+	[0x72] = { OT_POPX, ET_REG, 0, RF_HL,},
 	[0x09] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_B),},
 	[0x19] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_C),},
 	[0x29] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_D),},
 	[0x39] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_E),},
 	[0x49] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_H),},
 	[0x59] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_L),},
-	[0x69] = { OT_MOVRP, ET_2REG, 0, REG2(RF_B, POINTER(RF_H)),},
+	[0x69] = { OT_MOVRP, ET_2REG, 0, REG2(RF_B, POINTER(RF_HL)),},
 	[0x79] = { OT_MOV, ET_2REG, 0, REG2(RF_B, RF_A),},
 	[0x89] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_B),},
 	[0x99] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_C),},
@@ -241,7 +267,7 @@ static const struct opcode {
 	[0xb9] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_E),},
 	[0xc9] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_H),},
 	[0xd9] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_L),},
-	[0xe9] = { OT_MOVRP, ET_2REG, 0, REG2(RF_C, POINTER(RF_H)),},
+	[0xe9] = { OT_MOVRP, ET_2REG, 0, REG2(RF_C, POINTER(RF_HL)),},
 	[0xf9] = { OT_MOV, ET_2REG, 0, REG2(RF_C, RF_A),},
 	[0x0a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_B),},
 	[0x1a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_C),},
@@ -249,7 +275,7 @@ static const struct opcode {
 	[0x3a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_E),},
 	[0x4a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_H),},
 	[0x5a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_L),},
-	[0x6a] = { OT_MOVRP, ET_2REG, 0, REG2(RF_D, POINTER(RF_H)),},
+	[0x6a] = { OT_MOVRP, ET_2REG, 0, REG2(RF_D, POINTER(RF_HL)),},
 	[0x7a] = { OT_MOV, ET_2REG, 0, REG2(RF_D, RF_A),},
 	[0x8a] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_B),},
 	[0x9a] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_C),},
@@ -257,7 +283,7 @@ static const struct opcode {
 	[0xba] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_E),},
 	[0xca] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_H), },
 	[0xda] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_L), },
-	[0xea] = { OT_MOVRP, ET_2REG, 0, REG2(RF_E, POINTER(RF_H)), },
+	[0xea] = { OT_MOVRP, ET_2REG, 0, REG2(RF_E, POINTER(RF_HL)), },
 	[0xfa] = { OT_MOV, ET_2REG, 0, REG2(RF_E, RF_A), },
 	[0x0b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_B), },
 	[0x1b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_C),},
@@ -265,7 +291,7 @@ static const struct opcode {
 	[0x3b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_E),},
 	[0x4b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_H),},
 	[0x5b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_L),},
-	[0x6b] = { OT_MOVRP, ET_2REG, 0, REG2(RF_H, POINTER(RF_H)),},
+	[0x6b] = { OT_MOVRP, ET_2REG, 0, REG2(RF_H, POINTER(RF_HL)),},
 	[0x7b] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_A),},
 	[0x8b] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_B),},
 	[0x9b] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_C),},
@@ -273,26 +299,26 @@ static const struct opcode {
 	[0xbb] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_E),},
 	[0xcb] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_H),},
 	[0xdb] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_L),},
-	[0xeb] = { OT_MOVRP, ET_2REG, 0, REG2(RF_L, POINTER(RF_H)),},
+	[0xeb] = { OT_MOVRP, ET_2REG, 0, REG2(RF_L, POINTER(RF_HL)),},
 	[0xfb] = { OT_MOV, ET_2REG, 0, REG2(RF_L, RF_A),},
-	[0x0c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_B),},
-	[0x1c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_C),},
-	[0x2c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_D),},
-	[0x3c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_E),},
-	[0x4c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_H),},
-	[0x5c] = { OT_MOV, ET_2REG, 0, REG2(RF_H, RF_L),},
+	[0x0c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_B),},
+	[0x1c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_C),},
+	[0x2c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_D),},
+	[0x3c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_E),},
+	[0x4c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_H),},
+	[0x5c] = { OT_MOV, ET_2REG, 0, REG2(RF_HL, RF_L),},
 // halt	[0x6c] = { OT_MOV, 0, },
-	[0x7c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_H, RF_A),},
+	[0x7c] = { OT_MOVPR, ET_2REG, 0, REG2(RF_HL, RF_A),},
 	[0x8c] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_B),},
 	[0x9c] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_C),},
 	[0xac] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_D),},
 	[0xbc] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_E),},
 	[0xcc] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_H),},
 	[0xdc] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_L),},
-	[0xec] = { OT_MOVRP, ET_2REG, 0, REG2(RF_A, POINTER(RF_H)),},
+	[0xec] = { OT_MOVRP, ET_2REG, 0, REG2(RF_A, POINTER(RF_HL)),},
 	[0xfc] = { OT_MOV, ET_2REG, 0, REG2(RF_A, RF_A),},
-	[0xed] = { OT_MOVX, ET_2REG, 0, REG2(RF_H, RF_B),},
-	[0xfd] = { OT_MOVX, ET_2REG, 0, REG2(RF_H, RF_D),},
+	[0xed] = { OT_MOVX, ET_2REG, 0, REG2(RF_HL, RF_BC),},
+	[0xfd] = { OT_MOVX, ET_2REG, 0, REG2(RF_HL, RF_DE),},
 
 	[0x08] = { OT_CLRF, ET_NONE, 0, 0,},
 	[0x18] = { OT_SETF, ET_FL, 0, FZ, },
@@ -310,12 +336,12 @@ static const struct opcode {
 	[0x34] = { OT_ADD, ET_REG, 0, RF_E,},
 	[0x44] = { OT_ADD, ET_REG, 0, RF_H,},
 	[0x54] = { OT_ADD, ET_REG, 0, RF_L,},
-	[0x64] = { OT_ADDP, ET_REG, 0, POINTER(RF_H),},
+	[0x64] = { OT_ADDP, ET_REG, 0, POINTER(RF_HL),},
 	[0x74] = { OT_ADD, ET_REG, 0, RF_A,},
 	[0xa7] = { OT_ADDI, ET_REG, 1, RF_A, },
-	[0x83] = { OT_ADDX, ET_REG, 0, RF_B,},
-	[0x93] = { OT_ADDX, ET_REG, 0, RF_D,},
-	[0xa3] = { OT_ADDX, ET_REG, 0, RF_H,},
+	[0x83] = { OT_ADDX, ET_REG, 0, RF_BC,},
+	[0x93] = { OT_ADDX, ET_REG, 0, RF_DE,},
+	[0xa3] = { OT_ADDX, ET_REG, 0, RF_HL,},
 
 	[0x84] = { OT_SUB, ET_REG, 0, RF_B,},
 	[0x94] = { OT_SUB, ET_REG, 0, RF_C,},
@@ -323,7 +349,7 @@ static const struct opcode {
 	[0xb4] = { OT_SUB, ET_REG, 0, RF_E,},
 	[0xc4] = { OT_SUB, ET_REG, 0, RF_H,},
 	[0xd4] = { OT_SUB, ET_REG, 0, RF_L,},
-	[0xe4] = { OT_SUBP, ET_REG, 0, POINTER(RF_H),},
+	[0xe4] = { OT_SUBP, ET_REG, 0, POINTER(RF_HL),},
 	[0xf4] = { OT_SUB, ET_REG, 0, RF_A,},
 	[0xb7] = { OT_SUBI, ET_REG, 1, RF_A, },
 
@@ -333,12 +359,12 @@ static const struct opcode {
 	[0x33] = { OT_INC, ET_REG, 0, RF_E,},
 	[0x43] = { OT_INC, ET_REG, 0, RF_H,},
 	[0x53] = { OT_INC, ET_REG, 0, RF_L,},
-	[0x63] = { OT_INCP, ET_REG, 0, POINTER(RF_H),},
+	[0x63] = { OT_INCP, ET_REG, 0, POINTER(RF_HL),},
 	[0x73] = { OT_INC, ET_REG, 0, RF_A,},
 
-	[0xa8] = { OT_INX, ET_REG, 0, RF_B,},
-	[0xb8] = { OT_INX, ET_REG, 0, RF_D,},
-	[0xc8] = { OT_INX, ET_REG, 0, RF_H,},
+	[0xa8] = { OT_INX, ET_REG, 0, RF_BC,},
+	[0xb8] = { OT_INX, ET_REG, 0, RF_DE,},
+	[0xc8] = { OT_INX, ET_REG, 0, RF_HL,},
 
 	[0x07] = { OT_DEC, ET_REG, 0, RF_B,},
 	[0x17] = { OT_DEC, ET_REG, 0, RF_C,},
@@ -346,7 +372,7 @@ static const struct opcode {
 	[0x37] = { OT_DEC, ET_REG, 0, RF_E,},
 	[0x47] = { OT_DEC, ET_REG, 0, RF_H,},
 	[0x57] = { OT_DEC, ET_REG, 0, RF_L,},
-	[0x67] = { OT_DECP, ET_REG, 0, POINTER(RF_H),},
+	[0x67] = { OT_DECP, ET_REG, 0, POINTER(RF_HL),},
 	[0x77] = { OT_DEC, ET_REG, 0, RF_A,},
 
 	[0x05] = { OT_AND, ET_REG, 0, RF_B,},
@@ -355,7 +381,7 @@ static const struct opcode {
 	[0x35] = { OT_AND, ET_REG, 0, RF_E,},
 	[0x45] = { OT_AND, ET_REG, 0, RF_H,},
 	[0x55] = { OT_AND, ET_REG, 0, RF_L,},
-	[0x65] = { OT_ANDP, ET_REG, 0, POINTER(RF_H),},
+	[0x65] = { OT_ANDP, ET_REG, 0, POINTER(RF_HL),},
 	[0x75] = { OT_AND, ET_REG, 0, RF_A,},
 
 	[0xc7] = { OT_ANDI, ET_REG, 1, RF_A,},
@@ -366,7 +392,7 @@ static const struct opcode {
 	[0xb5] = { OT_OR, ET_REG, 0, RF_E,},
 	[0xc5] = { OT_OR, ET_REG, 0, RF_H,},
 	[0xd5] = { OT_OR, ET_REG, 0, RF_L,},
-	[0xe5] = { OT_ORP, ET_REG, 0, POINTER(RF_H),},
+	[0xe5] = { OT_ORP, ET_REG, 0, POINTER(RF_HL),},
 	[0xf5] = { OT_OR, ET_REG, 0, RF_A,},
 
 	[0xd7] = { OT_ORI, ET_REG, 1, RF_A, },
@@ -377,7 +403,7 @@ static const struct opcode {
 	[0x36] = { OT_XOR, ET_REG, 0, RF_E,},
 	[0x46] = { OT_XOR, ET_REG, 0, RF_H,},
 	[0x56] = { OT_XOR, ET_REG, 0, RF_L,},
-	[0x66] = { OT_XORP, ET_REG, 0, POINTER(RF_H),},
+	[0x66] = { OT_XORP, ET_REG, 0, POINTER(RF_HL),},
 	[0x76] = { OT_XOR, ET_REG, 0, RF_A,},
 
 	[0xe7] = { OT_XORI, ET_REG, 1, RF_A,},
@@ -388,7 +414,7 @@ static const struct opcode {
 	[0xb6] = { OT_CMP, ET_REG, 0, RF_E,},
 	[0xc6] = { OT_CMP, ET_REG, 0, RF_H,},
 	[0xd6] = { OT_CMP, ET_REG, 0, RF_L,},
-	[0xe6] = { OT_CMPP, ET_REG, 0, POINTER(RF_H),},
+	[0xe6] = { OT_CMPP, ET_REG, 0, POINTER(RF_HL),},
 	[0xf6] = { OT_CMP, ET_REG, 0, RF_A,},
 
 	[0xf7] = { OT_CMPI, ET_REG, 1, RF_A, },
@@ -399,7 +425,7 @@ static const struct opcode {
 	[0x3d] = { OT_CMPS, ET_REG, 0, RF_E,},
 	[0x4d] = { OT_CMPS, ET_REG, 0, RF_H,},
 	[0x5d] = { OT_CMPS, ET_REG, 0, RF_L,},
-	[0x6d] = { OT_CMPSP, ET_REG, 0, POINTER(RF_H),},
+	[0x6d] = { OT_CMPSP, ET_REG, 0, POINTER(RF_HL),},
 	[0x7d] = { OT_CMPS, ET_REG, 0, RF_A,},
 
 	[0xe0] = { OT_SIN, ET_NONE, 0, 0,},
@@ -436,6 +462,8 @@ static const struct opcode {
 #define IP mem[regs.pc]
 #define IPVB mem[regs.pc+1]
 #define IPVW *((unsigned short*)(mem+regs.pc+1))
+#define IPVB_X(X) (*(X+1))
+#define IPVW_X(X) (*((unsigned short*)(X+1)))
 #define MREADB(OFF) mem[OFF]
 #define MREADW(OFF) *((unsigned short*)(mem+OFF))
 //#define RREADB(R) regs.gpr[R]
@@ -445,34 +473,82 @@ static const struct opcode {
 #define REGNO(OPDESC) (OPDESC)
 #define REGPTR(OPDESC) (&regs.gpr[REGNO(OPDESC)])
 #define REGPTRW(OPDESC) ((unsigned short*)REGPTR(OPDESC))
-#define HLPTR (&mem[*REGPTRW(RF_H)])
+#define HLPTR (&mem[*REGPTRW(RF_HL)])
 #define STACKPTR (mem + regs.sp)
 #define STACKPTRW (unsigned short*)(STACKPTR)
 #define GETREG1(OPDESC) (OPDESC>>16)
 #define GETREG2(OPDESC) (OPDESC&0xffff)
+#define LB(n) (n&0xff)
+#define HB(n) ((n>>8)&0xff)
+#define ZFLAG(n) ( (n) ? 0 : FZ )
+static inline unsigned short swap16(unsigned short value) {
+	return (LB(value)<<8) | HB(value);
+}
 
-static void ezdraw() {
-	unsigned *ptr = (void *) ezsdl_get_vram();
-        unsigned pitch = ezsdl_get_pitch()/4;
+static void ezdraw_all() {
+	unsigned PIXEL *ptr = (void *) ezsdl_get_vram();
+        unsigned pitch = ezsdl_get_pitch()/sizeof(*ptr);
 	unsigned x, y, yl;
+#if 0
 	for(y=0; y<vmem_h; ++y) {
 		yl = y*pitch;
 		for(x=0; x<vmem_w; ++x) {
 			ptr[yl + x] = vmem[y*vmem_w+x]*0x10101;
 		}
 	}
+#else
+	for(y=0; y<vmem_h; ++y) {
+		unsigned yy,xx;
+		for(yy = 0; yy < SCALE; ++yy) {
+		yl = ((y*SCALE)+yy)*pitch; // *SCALE;
+		for(x=0; x<vmem_w; ++x) {
+			for(xx=0; xx<SCALE; ++xx) {
+				ptr[yl + (x*SCALE)+xx] = vmem[y*vmem_w+x]*0x10101;
+			}
+		}
+		}
+	}
+#endif
 	ezsdl_refresh();
+}
+static void ezdraw_region(unsigned ix, unsigned iy, unsigned xl) {
+	unsigned PIXEL *ptr = (void *) ezsdl_get_vram();
+        unsigned pitch = ezsdl_get_pitch()/sizeof(*ptr);
+	unsigned x, y, yl;
+#if 0
+	for(y=0; y<vmem_h; ++y) {
+		yl = y*pitch;
+		for(x=0; x<vmem_w; ++x) {
+			ptr[yl + x] = vmem[y*vmem_w+x]*0x10101;
+		}
+	}
+#else
+	for(y=iy; y<iy+1; ++y) {
+		unsigned yy,xx;
+		for(yy = 0; yy < SCALE; ++yy) {
+		yl = ((y*SCALE)+yy)*pitch; // *SCALE;
+		for(x=ix; x<ix+xl; ++x) {
+			for(xx=0; xx<SCALE; ++xx) {
+//				ptr[yl + xx+x] = vmem[y*vmem_w+x]*0x10101;
+				ptr[yl + (x*SCALE)+xx] = vmem[y*vmem_w+x]*0x10101;
+			}
+		}
+		}
+	}
+#endif
+	ezsdl_update_region(ix*SCALE, iy*SCALE, xl*SCALE, SCALE);
 }
 
 static void draw(signed char x, signed char y, unsigned char what) {
-	if(x <= -8 || y < 0) return;
+	if(x <= -8 || y < 0 || y >= vmem_h || x >= vmem_w) return;
 	unsigned i;
 	for(i=0; i<8; ++i) {
 		if(x+i<0) continue;
 		if(x+i>vmem_w) break;
-		vmem[y*vmem_w+x+i] = (what & (1<<(7-i)))*255;
+		vmem[y*vmem_w+x+i] = !!(what & (1<<(7-i)))*255;
 	}
-	ezdraw();
+	//ezdraw_all();
+	ezdraw_region(x<0?0:x, y, x<0?8-x:  x+8>vmem_w?x+8-vmem_w:8);
 }
 static void clrscr(void) {
 	memset(vmem, 0, sizeof vmem);
@@ -510,17 +586,17 @@ static char *flagstr(unsigned char desc) {
 		default: abort();
 	}
 }
-static char *fmtins(char *buf) {
-	static const char *regnames[] = {"B", "C", "D", "E", "H", "L", "A", "FL", "SP"};
-	const struct opcode *oi = &opcodes[IP];
+static char *fmtins(char *buf, unsigned char* ip) {
+	static const char *regnames[] = {[N_B] = "B", [N_C] = "C", [N_D] = "D", [N_E] = "E", [N_H] = "H", [N_L] = "L", [N_A] = "A", [N_F] = "F", [N_SP] = "SP"};
+	const struct opcode *oi = &opcodes[*ip];
 	char *p = buf + sprintf(buf, "%s", opstr[oi->optype]);
 	switch(oi->enctype) {
 		case ET_REG: p += sprintf(p, " %s", regnames[oi->opdesc]); break;
 		case ET_2REG: p += sprintf(p, " %s, %s", regnames[GETREG1(oi->opdesc)], regnames[GETREG2(oi->opdesc)]); break;
 		case ET_FL: p += sprintf(p, "%s%s", oi->opdesc & FNOT ? "n" : "", flagstr(oi->opdesc)); break;
 	}
-	if(oi->argb == 2) sprintf(p, " %04x", IPVW);
-	else if(oi->argb == 1) sprintf(p, " %02x", IPVB);
+	if(oi->argb == 2) sprintf(p, " 0x%04x", IPVW_X(ip));
+	else if(oi->argb == 1) sprintf(p, " 0x%02x", IPVB_X(ip));
 	return buf;
 }
 static char *fmtflags(char* buf) {
@@ -543,13 +619,46 @@ static void alu_set(unsigned char *old, unsigned short new) {
 	setbit(FC, new & (1<<8));
 	*old = new;
 }
+
 static void alu_add(unsigned char* old, unsigned char val) {
-	unsigned short result = *old + val;
-	setbit(FZ, !!(result == 0));
-	setbit(FN, !!(result & (1<<7)));
-	setbit(FC, !!(result & (1<<8)));
-	setbit(FH, !!(((*old&0xf) + (val&0xf))&0x10));
-	*old = result;
+	unsigned acc = (unsigned short) *old + (unsigned short)val;
+	F = (ZFLAG(LB(acc))) \
+	| (FH & ((*old ^ (val) ^ LB(acc)) << 1)) \
+	| (HB(acc) << 4);
+	*old = LB(acc);
+}
+static void alu_sub(unsigned char* old, unsigned char val) {
+	unsigned acc = (unsigned short) *old - (unsigned short)val;
+	F = FN \
+	| (ZFLAG(LB(acc))) \
+	| (FH & ((*old ^ (val) ^ LB(acc)) << 1)) \
+	| ((unsigned char)(-(signed char)HB(acc)) << 4);
+	*old = LB(acc);
+}
+#define B3(n) ((n>>16)&0xff)
+
+static void alu_addw(unsigned short *old, unsigned char val) {
+	unsigned acc = (unsigned) *old + (unsigned)val;
+//	F = (HB(acc)==0?ZF|0) \
+
+	static unsigned CNT = 0;
+	F = (F & (FZ)) \
+	| (FH & ((HB(*old) ^ ((val)>>8) ^ HB(acc)) << 1)) \
+	| (B3(acc) << 4); \
+//	F = 0;
+//	if(LB(acc) == 0) F = FZ;
+//	F = (ZFLAG(LB(acc))) \
+//	| (FH & ((*old ^ (val) ^ LB(acc)) << 1)) \
+//	| (HB(acc) << 4);
+//	F = rand()&0xf0;
+	//F = 0;
+	//if(CNT == TOGGLE) F = FZ;
+	//if(HB(acc) == 0) F = FZ;
+//	F = F & FZ;;
+//	if(LB(*old) == 0) F = FZ;
+
+	*old = acc&0xffff;
+	CNT++;
 }
 static void setflags(unsigned char result) {
 	setbit(FZ, result == 0);
@@ -559,6 +668,23 @@ static void setflagsw(unsigned short result) {
 	setbit(FZ, result == 0);
 	setbit(FN, result & (1<<15));
 }
+static int disas(unsigned char *mem, unsigned len) {
+	unsigned ip = 0;
+	while(ip < len) {
+		const struct opcode *oi = &opcodes[mem[ip]];
+		unsigned int inc = 1 + oi->argb;
+		char buf[32], buf2[16];
+		printf("%04x\t(%s) %s\n",
+			ip,
+			fmtbin(buf2, mem+ip, inc),
+			fmtins(buf, mem+ip));
+		ip += inc;
+	}
+}
+static int check_bootrom_modified() {
+	return memcmp(mem, bootrom, lbootrom);
+}
+static int ignore_ill = 0;
 static int step() {
 	const struct opcode *oi = &opcodes[IP];
 	unsigned int inc = 1 + oi->argb;
@@ -566,25 +692,27 @@ static int step() {
 	unsigned tmp;
 	int itmp;
 	char buf[32], buf2[16];
+	//if(PC == 0x45 || check_bootrom_modified()) asm("int3");
 	if(debug) dprintf(2, "BEF: "); state();
 	if(debug) dprintf(2, "(%s) %s\n",
 		fmtbin(buf2, &IP, oi->argb+1),
-		fmtins(buf));
+		fmtins(buf, &IP));
 	switch(oi->optype) {
-	case OT_HALT: sleep(10); return 0;
-	case OT_ILL:  dprintf(2, "SIGILL\n"); return 0;
+	case OT_HALT: return 0;
+	case OT_ILL:
+		if(IP != 0x2e) dprintf(2, "SIGILL\n");
+		if(!ignore_ill) return 0;
+		break;
 	case OT_NOP:  break;
 	case OT_LDI:  *REGPTR(oi->opdesc) = IPVB; break;
 	case OT_LDIP: *HLPTR = IPVB; break;
-	case OT_LDX:
-		*REGPTRW(oi->opdesc) = IPVW;
-		break;
+	case OT_LDX:  *REGPTRW(oi->opdesc) = IPVW; break;
 	case OT_PUSH:
 		mem[regs.sp] = *REGPTR(oi->opdesc);
 		regs.sp -= 2;
 		break;
 	case OT_PUSHP:
-		*STACKPTRW = *HLPTR;
+		*STACKPTR = *HLPTR;
 		regs.sp -= 2;
 	case OT_PUSHX:
 		*STACKPTRW = *REGPTRW(oi->opdesc);
@@ -592,7 +720,7 @@ static int step() {
 		break;
 	case OT_POP:
 		regs.sp += 2;
-		*REGPTRW(oi->opdesc) = *STACKPTR;
+		*REGPTR(oi->opdesc) = *STACKPTR;
 		break;
 	case OT_POPP:
 		regs.sp += 2;
@@ -604,21 +732,22 @@ static int step() {
 		break;
 	case OT_MOV: *REGPTR(GETREG1(oi->opdesc)) = *REGPTR(GETREG2(oi->opdesc)); break;
 	case OT_MOVRP: *REGPTR(GETREG1(oi->opdesc)) = *HLPTR; break;
+	case OT_MOVPR: *HLPTR = *REGPTR(GETREG2(oi->opdesc)); break;
 	case OT_MOVX: *REGPTRW(GETREG1(oi->opdesc)) = *REGPTRW(GETREG2(oi->opdesc)); break;
 	case OT_CLRF: F = 0; break;
 	case OT_SETF: setbit(oi->opdesc & ~FNOT, !(oi->opdesc & FNOT)); break;
 	case OT_ADD:  alu_add(REGPTR(oi->opdesc), A); break;
 	case OT_ADDP: alu_add(HLPTR, A); break;
 	case OT_ADDI: alu_add(REGPTR(oi->opdesc), IPVB); break;
-	case OT_ADDX: F = 0xff; *REGPTRW(oi->opdesc) += A; /*setflagsw(*REGPTRW(oi->opdesc));*/ break;
-	case OT_SUB:  us = *REGPTR(oi->opdesc); us -= A; alu_set(REGPTR(oi->opdesc), us); break;
-	case OT_SUBP: us = *HLPTR; us -= A; alu_set(HLPTR, us); break;
-	case OT_SUBI: us = *REGPTR(oi->opdesc); us -= IPVB; alu_set(REGPTR(oi->opdesc), us); break;
+	case OT_ADDX: alu_addw(REGPTRW(oi->opdesc), A); /*setflagsw(*REGPTRW(oi->opdesc));*/ break;
 	case OT_INC:  alu_add(REGPTR(oi->opdesc), 1); break;
 	case OT_INCP: alu_add(HLPTR, 1); break;
 	/* inx SHALL NOT set flags */
 	case OT_INX:  *REGPTRW(oi->opdesc) += 1; break;
-	case OT_DEC:  us = *REGPTR(oi->opdesc); --us; alu_set(REGPTR(oi->opdesc), us); break;
+	case OT_SUB:  alu_sub(REGPTR(oi->opdesc), A); break;
+	case OT_SUBP: alu_sub(HLPTR, A); break;
+	case OT_SUBI: alu_sub(REGPTR(oi->opdesc), IPVB); break;
+	case OT_DEC:  alu_sub(REGPTR(oi->opdesc), 1); break;
 	case OT_AND:  F = 0; *REGPTR(oi->opdesc) &= A; setflags(*REGPTR(oi->opdesc)); break;
 	case OT_ANDI: F = 0; *REGPTR(oi->opdesc) &= IPVB; setflags(*REGPTR(oi->opdesc)); break;
 	case OT_OR:   F = 0; *REGPTR(oi->opdesc) |= A; setflags(*REGPTR(oi->opdesc)); break;
@@ -632,8 +761,9 @@ static int step() {
 	case OT_CMPSP:setbit(FZ, A==*HLPTR); setbit(FN, *(signed char*)HLPTR < (signed char)A); break;
 	case OT_SIN:  A = fgetc(stdin); break;
 	case OT_SOUT:
-	fputc(A, stdout);
-dprintf(2, ">>> "); fputc(A, stderr); dprintf(2, "\n"); fflush(stdout); break;
+	fputc(A, stdout); fflush(stdout);
+//dprintf(2, ">>> "); fputc(A, stderr); dprintf(2, "\n"); fflush(stdout);
+	break;
 	case OT_CLRSCR: clrscr(); break;
 	case OT_DRAW: ; draw(C, B, A); break;
 	case OT_JMP16:  regs.pc = IPVW; inc = 0; break;
@@ -661,9 +791,14 @@ dprintf(2, ">>> "); fputc(A, stderr); dprintf(2, "\n"); fflush(stdout); break;
 	return 1;
 }
 
-static void run() {
+static void init() {
 	unsigned int rnd = 0x65, i;
 	for(i=0;i<7;++i) regs.gpr[i] = rnd ^ i;
+	F = FZ;
+	PC = 0;
+	SP = 0;
+}
+static void run() {
 	//state();
 	while(step());
 }
@@ -678,7 +813,11 @@ char *slurp(FILE *f, unsigned *len) {
 	fclose(f);
 	return mem;
 }
-int main() {
+static void load() {
+
+}
+int main(int argc, char**argv) {
+	srand(1);
 	FILE *f;
 	f = fopen("bootrom", "r");
 	bootrom = slurp(f, &lbootrom);
@@ -686,6 +825,29 @@ int main() {
 	rom = slurp(f, &lrom);
 	memcpy(mem, bootrom, lbootrom);
 	memcpy(mem + 0x597, rom, lrom);
-	ezsdl_init(vmem_w, vmem_h, SDL_HWPALETTE);
+
+//	mem[lbootrom] = 0x2e; // use this sigill to return execution
+
+	unsigned i;
+	ezsdl_init(vmem_w*SCALE, vmem_h*SCALE, SDL_HWPALETTE);
+#if EZSDL_BITDEPTH == 8
+	SDL_Color colors[256];
+	for(i=0;i<256;i++) colors[i] = (SDL_Color){.r=i,.g=i,.b=i};
+	SDL_SetColors(ezsdl.disp.surface, colors, 0, 256);
+#endif
+	if(argc > 1 && *argv[1] == 'd') {
+		disas(bootrom, lbootrom);
+		return 0;
+	}
+	init();
+	// run boot rom
+	ignore_ill = 1;
 	run();
+#if 0
+	memcpy(mem + 0x597, rom, lrom);
+	F |= FH;
+	PC = 0x597;
+	ignore_ill = 1;
+	run();
+#endif
 }
